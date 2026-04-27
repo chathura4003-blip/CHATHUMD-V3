@@ -99,7 +99,7 @@ function getSettingsPayload() {
     return {
         botName: runtimeSettings.getBotName(),
         prefix: runtimeSettings.getPrefix(),
-        ownerNumber: cfg.OWNER_NUMBER,
+        ownerNumber: appState.getOwner() || cfg.OWNER_NUMBER || '',
         autoRead: runtimeSettings.getAutoRead(),
         autoTyping: runtimeSettings.getAutoTyping(),
         nsfwEnabled: runtimeSettings.getNsfwEnabled(),
@@ -113,6 +113,13 @@ function getSettingsPayload() {
         aiGroupMode: appState.getAiGroupMode(),
         aiSystemInstruction: appState.getAiSystemInstruction(),
         aiMaxWords: appState.getAiMaxWords(),
+        alwaysOnline: appState.getAlwaysOnline(),
+        alwaysRecording: appState.getAlwaysRecording(),
+        antiCall: appState.getAntiCall(),
+        antiGroupJoin: appState.getAntiGroupJoin(),
+        autoBio: appState.getAutoBio(),
+        mentionReply: appState.getMentionReply(),
+        antiDelete: appState.getAntiDelete(),
         premiumCode: cfg.PREMIUM_CODE,
         warnings: validation.warnings,
         runMode: validation.mode.explicitMode,
@@ -157,8 +164,15 @@ function getMainSessionPayload() {
         aiAutoPersona: ov.aiAutoPersona || appState.getAiAutoPersona(),
         aiAutoLang: ov.aiAutoLang || appState.getAiAutoLang(),
         aiGroupMode: ov.aiGroupMode || appState.getAiGroupMode(),
-        aiSystemInstruction: ov.aiSystemInstruction || appState.getAiSystemInstruction(),
+        aiSystemInstruction: ov.aiSystemInstruction !== undefined ? ov.aiSystemInstruction : appState.getAiSystemInstruction(),
         aiMaxWords: ov.aiMaxWords || appState.getAiMaxWords(),
+        alwaysOnline: ov.alwaysOnline !== undefined ? !!ov.alwaysOnline : appState.getAlwaysOnline(),
+        alwaysRecording: ov.alwaysRecording !== undefined ? !!ov.alwaysRecording : appState.getAlwaysRecording(),
+        antiCall: ov.antiCall !== undefined ? !!ov.antiCall : appState.getAntiCall(),
+        antiGroupJoin: ov.antiGroupJoin !== undefined ? !!ov.antiGroupJoin : appState.getAntiGroupJoin(),
+        autoBio: ov.autoBio !== undefined ? !!ov.autoBio : appState.getAutoBio(),
+        mentionReply: ov.mentionReply !== undefined ? ov.mentionReply : appState.getMentionReply(),
+        antiDelete: ov.antiDelete !== undefined ? ov.antiDelete : appState.getAntiDelete(),
         aiKeysStatus: {
             gemini: !!(config.GEMINI_API_KEY && config.GEMINI_API_KEY.trim()),
             openrouter: !!(config.OPENROUTER_API_KEY && config.OPENROUTER_API_KEY.trim()),
@@ -807,6 +821,30 @@ app.post('/bot-api/sessions/:id/settings', authMiddleware, async (req, res) => {
             if (req.body.aiAutoLang !== undefined) overrides.aiAutoLang = String(req.body.aiAutoLang);
             if (req.body.aiGroupMode !== undefined) overrides.aiGroupMode = String(req.body.aiGroupMode);
 
+            // Pro Features (per-session overrides; bot.js falls back to global appState).
+            if (req.body.aiSystemInstruction !== undefined) overrides.aiSystemInstruction = String(req.body.aiSystemInstruction);
+            if (req.body.aiMaxWords !== undefined) overrides.aiMaxWords = parseInt(req.body.aiMaxWords) || 30;
+            if (req.body.alwaysOnline !== undefined) overrides.alwaysOnline = !!req.body.alwaysOnline;
+            if (req.body.alwaysRecording !== undefined) overrides.alwaysRecording = !!req.body.alwaysRecording;
+            if (req.body.antiCall !== undefined) overrides.antiCall = !!req.body.antiCall;
+            if (req.body.antiGroupJoin !== undefined) overrides.antiGroupJoin = !!req.body.antiGroupJoin;
+            if (req.body.autoBio !== undefined) overrides.autoBio = !!req.body.autoBio;
+            if (req.body.mentionReply !== undefined) overrides.mentionReply = String(req.body.mentionReply || '');
+            if (req.body.antiDelete !== undefined) {
+                const ad = req.body.antiDelete;
+                if (ad === null || ad === false) {
+                    overrides.antiDelete = null;
+                } else if (typeof ad === 'object') {
+                    overrides.antiDelete = {
+                        enabled: ad.enabled !== false,
+                        target: ad.target === 'owner' ? 'owner' : 'chat',
+                        filters: (ad.filters && typeof ad.filters === 'object') ? ad.filters : null,
+                    };
+                } else {
+                    overrides.antiDelete = { enabled: !!ad, target: 'chat', filters: null };
+                }
+            }
+
             db.setSetting('main_bot_settings', overrides);
             db.flush();
             
@@ -1063,7 +1101,8 @@ app.get('/bot-api/settings', authMiddleware, (req, res) => {
 app.post('/bot-api/settings', authMiddleware, (req, res) => {
     const { 
         botName, prefix, autoRead, autoTyping, nsfwEnabled, workMode, autoViewStatus, autoReactStatus,
-        aiAutoReply, aiAutoPersona, aiAutoLang, aiAutoVoice, aiGroupMode, aiSystemInstruction, aiMaxWords
+        aiAutoReply, aiAutoPersona, aiAutoLang, aiAutoVoice, aiGroupMode, aiSystemInstruction, aiMaxWords,
+        ownerNumber, alwaysOnline, alwaysRecording, antiCall, antiGroupJoin, autoBio, mentionReply
     } = req.body || {};
     try {
         if (botName !== undefined) db.setSetting('botName', String(botName).trim());
@@ -1082,6 +1121,17 @@ app.post('/bot-api/settings', authMiddleware, (req, res) => {
         }
         if (autoViewStatus !== undefined) db.setSetting('auto_view_status', !!autoViewStatus);
         if (autoReactStatus !== undefined) db.setSetting('auto_react_status', !!autoReactStatus);
+
+        // Owner number — fixes silent-fail where Settings page never saved this field.
+        if (ownerNumber !== undefined) {
+            const trimmed = String(ownerNumber).trim();
+            appState.setOwner(trimmed || null);
+            // also mirror into settings payload source so getSettingsPayload reflects it
+            try {
+                const cfgModule = require('./config');
+                cfgModule.OWNER_NUMBER = trimmed;
+            } catch {}
+        }
         
         // AI Settings - Aligning with canonical camelCase fields
         if (aiAutoReply !== undefined) appState.setAiAutoReply(!!aiAutoReply);
@@ -1091,6 +1141,14 @@ app.post('/bot-api/settings', authMiddleware, (req, res) => {
         if (aiGroupMode !== undefined) appState.setAiGroupMode(String(aiGroupMode));
         if (aiSystemInstruction !== undefined) appState.setAiSystemInstruction(String(aiSystemInstruction));
         if (aiMaxWords !== undefined) appState.setAiMaxWords(Number(aiMaxWords) || 30);
+
+        // Pro feature toggles (global fallback; per-session values still go through /bot-api/sessions/:id/settings)
+        if (alwaysOnline !== undefined) appState.setAlwaysOnline(!!alwaysOnline);
+        if (alwaysRecording !== undefined) appState.setAlwaysRecording(!!alwaysRecording);
+        if (antiCall !== undefined) appState.setAntiCall(!!antiCall);
+        if (antiGroupJoin !== undefined) appState.setAntiGroupJoin(!!antiGroupJoin);
+        if (autoBio !== undefined) appState.setAutoBio(!!autoBio);
+        if (mentionReply !== undefined) appState.setMentionReply(String(mentionReply || ''));
 
         db.flush();
         const payload = getSettingsPayload();

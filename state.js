@@ -180,6 +180,48 @@ module.exports = {
     getAiMaxWords: () => {
         try { return parseInt(require('./lib/db').getSetting('aiMaxWords')) || 30; } catch { return 30; }
     },
+    setAlwaysOnline: (v) => {
+        try { require('./lib/db').setSetting('alwaysOnline', !!v); } catch {}
+    },
+    getAlwaysOnline: () => {
+        try { return require('./lib/db').getSetting('alwaysOnline') === true; } catch { return false; }
+    },
+    setAlwaysRecording: (v) => {
+        try { require('./lib/db').setSetting('alwaysRecording', !!v); } catch {}
+    },
+    getAlwaysRecording: () => {
+        try { return require('./lib/db').getSetting('alwaysRecording') === true; } catch { return false; }
+    },
+    setAntiCall: (v) => {
+        try { require('./lib/db').setSetting('antiCall', !!v); } catch {}
+    },
+    getAntiCall: () => {
+        try { return require('./lib/db').getSetting('antiCall') === true; } catch { return false; }
+    },
+    setAntiGroupJoin: (v) => {
+        try { require('./lib/db').setSetting('antiGroupJoin', !!v); } catch {}
+    },
+    getAntiGroupJoin: () => {
+        try { return require('./lib/db').getSetting('antiGroupJoin') === true; } catch { return false; }
+    },
+    setAutoBio: (v) => {
+        try { require('./lib/db').setSetting('autoBio', !!v); } catch {}
+    },
+    getAutoBio: () => {
+        try { return require('./lib/db').getSetting('autoBio') === true; } catch { return false; }
+    },
+    setMentionReply: (v) => {
+        try { require('./lib/db').setSetting('mentionReply', String(v || '')); } catch {}
+    },
+    getMentionReply: () => {
+        try { return require('./lib/db').getSetting('mentionReply') || ''; } catch { return ''; }
+    },
+    setAntiDelete: (v) => {
+        try { require('./lib/db').setSetting('antiDelete', v && typeof v === 'object' ? v : null); } catch {}
+    },
+    getAntiDelete: () => {
+        try { return require('./lib/db').getSetting('antiDelete') || null; } catch { return null; }
+    },
     getLogs: () => _logs,
 };
 

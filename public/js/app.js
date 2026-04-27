@@ -2662,6 +2662,7 @@
       wrap.innerHTML = warnings.map((warning) => `<div class="notice"><strong>${escapeHtml((settings?.runMode || 'production').toUpperCase())} mode warning</strong>${escapeHtml(warning)}</div>`).join('');
     }
     async function saveSettings() {
+      const ownerEl = document.getElementById('setOwner');
       const body = {
         botName: document.getElementById('setName').value,
         prefix: document.getElementById('setPrefix').value,
@@ -2671,6 +2672,7 @@
         workMode: document.getElementById('setWorkMode').value,
         autoViewStatus: document.getElementById('setAutoViewStatus').checked,
         autoReactStatus: document.getElementById('setAutoReactStatus').checked,
+        ownerNumber: ownerEl ? ownerEl.value.trim() : undefined,
       };
       try {
         const res = await api('/bot-api/settings', { method: 'POST', body: JSON.stringify(body) });

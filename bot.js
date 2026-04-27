@@ -26,6 +26,143 @@ const spamMap = new Map();
 let activeSocket = null;
 let reconnectTimer = null;
 let startPromise = null;
+let alwaysOnlineTimer = null;
+let autoBioTimer = null;
+let proFeaturesBound = false;
+
+const AUTO_BIO_LINES = [
+    '🤖 CHATHU MD Online — type !menu',
+    '⚡ Powered by CHATHU MD',
+    '🌐 24/7 Active — Multi-Device WhatsApp Bot',
+    '🛡 Shield Protection Active',
+    '✨ Auto-Reply Online',
+];
+
+function getMainBotSettings() {
+    try { return db.getSetting('main_bot_settings') || {}; }
+    catch { return {}; }
+}
+
+function resolveProFlag(key, fallback) {
+    const ov = getMainBotSettings();
+    if (ov[key] !== undefined && ov[key] !== null) return !!ov[key];
+    if (typeof fallback === 'function') {
+        try { return !!fallback(); } catch { return false; }
+    }
+    return !!fallback;
+}
+
+function resolveProValue(key, fallback) {
+    const ov = getMainBotSettings();
+    if (ov[key] !== undefined && ov[key] !== null) return ov[key];
+    if (typeof fallback === 'function') {
+        try { return fallback(); } catch { return null; }
+    }
+    return fallback;
+}
+
+function clearProTimers() {
+    if (alwaysOnlineTimer) { clearInterval(alwaysOnlineTimer); alwaysOnlineTimer = null; }
+    if (autoBioTimer) { clearInterval(autoBioTimer); autoBioTimer = null; }
+    proFeaturesBound = false;
+}
+
+function bindProFeatureTimers(sock) {
+    if (proFeaturesBound) return;
+    proFeaturesBound = true;
+
+    // Always Online: re-assert presence every 30s
+    alwaysOnlineTimer = setInterval(async () => {
+        if (sock !== activeSocket) return;
+        try {
+            const enabled = resolveProFlag('alwaysOnline', () => appState.getAlwaysOnline());
+            if (!enabled) return;
+            await sock.sendPresenceUpdate('available').catch(() => {});
+        } catch {}
+    }, 30 * 1000);
+
+    // Auto-Bio: rotate WhatsApp profile status every 30 minutes
+    let bioIdx = 0;
+    autoBioTimer = setInterval(async () => {
+        if (sock !== activeSocket) return;
+        try {
+            const enabled = resolveProFlag('autoBio', () => appState.getAutoBio());
+            if (!enabled) return;
+            const line = AUTO_BIO_LINES[bioIdx % AUTO_BIO_LINES.length];
+            bioIdx += 1;
+            await sock.updateProfileStatus(line).catch(() => {});
+        } catch {}
+    }, 30 * 60 * 1000);
+}
+
+async function handleAntiDelete(sock, key) {
+    try {
+        const ov = getMainBotSettings();
+        const cfg = (ov && typeof ov.antiDelete === 'object' && ov.antiDelete)
+            ? ov.antiDelete
+            : appState.getAntiDelete();
+        if (!cfg || cfg.enabled === false) return;
+
+        const cached = key?.remoteJid && key?.id ? getCachedMsg(key.remoteJid, key.id) : null;
+        if (!cached || !cached.message) return;
+
+        // Don't replay our own deletions (avoid loops).
+        if (cached.key?.fromMe) return;
+
+        // Filters: text/image/video/audio/sticker/doc — opt-in (default ON if filters object missing).
+        const filters = (cfg.filters && typeof cfg.filters === 'object') ? cfg.filters : null;
+        const m = cached.message || {};
+        const kind = m.imageMessage ? 'image'
+            : m.videoMessage ? 'video'
+            : m.audioMessage ? 'audio'
+            : m.stickerMessage ? 'sticker'
+            : m.documentMessage ? 'doc'
+            : (m.conversation || m.extendedTextMessage) ? 'text'
+            : 'text';
+        if (filters && filters[kind] === false) return;
+
+        const target = (cfg.target === 'owner') ? 'owner' : 'chat';
+        let destJid = cached.key.remoteJid;
+        if (target === 'owner') {
+            const owner = ov.owner || appState.getOwner();
+            if (owner) {
+                const digits = String(owner).replace(/\D/g, '');
+                if (digits) destJid = `${digits}@s.whatsapp.net`;
+            }
+        }
+
+        const senderRaw = cached.key.participant || cached.key.remoteJid || '';
+        const senderTag = senderRaw.split('@')[0] || 'unknown';
+        const banner = `🛡 *Anti-Delete Recovery*\n👤 From: @${senderTag}\n🗑 Original chat: ${cached.key.remoteJid}\n⏱ ${new Date().toLocaleString()}`;
+
+        // Send banner first.
+        try {
+            await sock.sendMessage(destJid, {
+                text: banner,
+                mentions: senderRaw && senderRaw.includes('@') ? [senderRaw] : []
+            });
+        } catch (e) {
+            logger(`[AntiDelete] Banner send failed: ${e.message}`);
+        }
+
+        // Then forward the original message content.
+        try {
+            await sock.relayMessage(destJid, cached.message, { messageId: cached.key.id });
+        } catch (eRelay) {
+            // Fallback: re-send text payloads only.
+            const txt = m.conversation || m.extendedTextMessage?.text || '';
+            if (txt) {
+                try { await sock.sendMessage(destJid, { text: `📝 ${txt}` }); } catch {}
+            } else {
+                logger(`[AntiDelete] Relay failed (${kind}): ${eRelay.message}`);
+            }
+        }
+
+        logger(`[AntiDelete] Recovered ${kind} message ${cached.key.id} → ${target}`);
+    } catch (e) {
+        logger(`[AntiDelete] Recovery error: ${e.message}`);
+    }
+}
 
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -159,6 +296,7 @@ async function stopBot(options = {}) {
     } = options;
 
     clearReconnectTimer();
+    clearProTimers();
     const socket = activeSocket;
     activeSocket = null;
 
@@ -166,6 +304,9 @@ async function stopBot(options = {}) {
         try { socket.ev.removeAllListeners('connection.update'); } catch {}
         try { socket.ev.removeAllListeners('creds.update'); } catch {}
         try { socket.ev.removeAllListeners('messages.upsert'); } catch {}
+        try { socket.ev.removeAllListeners('messages.update'); } catch {}
+        try { socket.ev.removeAllListeners('call'); } catch {}
+        try { socket.ev.removeAllListeners('group-participants.update'); } catch {}
         try { socket.ev.removeAllListeners('error'); } catch {}
         if (logout) {
             try { await socket.logout(); } catch {}
@@ -304,6 +445,7 @@ async function createSocket(options = {}) {
                 }
 
                 await syncGroups(sock, '__main__');
+                bindProFeatureTimers(sock);
                 return;
             }
 
@@ -345,6 +487,66 @@ async function createSocket(options = {}) {
     sock.ev.on('messages.upsert', async (messageUpdate) => {
         if (sock !== activeSocket) return;
         await handleMessages(sock, messageUpdate);
+    });
+
+    // ── Pro Features: Anti-Delete recovery ────────────────────────────────
+    sock.ev.on('messages.update', async (updates) => {
+        if (sock !== activeSocket) return;
+        try {
+            for (const u of updates) {
+                const isRevoke = u?.update?.message === null
+                    || u?.update?.messageStubType === 68
+                    || u?.update?.messageStubType === 'REVOKE';
+                if (!isRevoke) continue;
+                await handleAntiDelete(sock, u.key);
+            }
+        } catch (e) {
+            logger(`[AntiDelete] Update handler error: ${e.message}`);
+        }
+    });
+
+    // ── Pro Features: Anti-Call (auto-reject) ─────────────────────────────
+    sock.ev.on('call', async (calls) => {
+        if (sock !== activeSocket) return;
+        if (!resolveProFlag('antiCall', () => appState.getAntiCall())) return;
+        try {
+            for (const c of calls) {
+                if (c.status !== 'offer') continue;
+                try { await sock.rejectCall(c.id, c.from); } catch {}
+                try {
+                    await sock.sendMessage(c.from, {
+                        text: '🚫 *Calls are not allowed.* This bot rejects incoming calls automatically. Please send a message instead.'
+                    });
+                } catch {}
+                logger(`[AntiCall] Rejected ${c.isVideo ? 'video' : 'voice'} call from ${c.from}.`);
+            }
+        } catch (e) {
+            logger(`[AntiCall] Handler error: ${e.message}`);
+        }
+    });
+
+    // ── Pro Features: Anti-Group-Join (auto-leave on invite) ──────────────
+    sock.ev.on('group-participants.update', async (event) => {
+        if (sock !== activeSocket) return;
+        if (event.action !== 'add') return;
+        if (!resolveProFlag('antiGroupJoin', () => appState.getAntiGroupJoin())) return;
+        try {
+            const { jidNormalizedUser } = require('@whiskeysockets/baileys');
+            const selfJid = sock?.user?.id ? jidNormalizedUser(sock.user.id) : null;
+            if (!selfJid) return;
+            const wasAdded = (event.participants || []).some((p) => {
+                try { return jidNormalizedUser(p) === selfJid; } catch { return false; }
+            });
+            if (!wasAdded) return;
+            await delay(2000);
+            try {
+                await sock.sendMessage(event.id, { text: '🚫 *Anti-Group-Join* is enabled. Leaving this group.' });
+            } catch {}
+            try { await sock.groupLeave(event.id); } catch {}
+            logger(`[AntiGroupJoin] Left ${event.id} after auto-join.`);
+        } catch (e) {
+            logger(`[AntiGroupJoin] Handler error: ${e.message}`);
+        }
     });
 
     if (pairPhone && !state.creds.registered) {
@@ -761,6 +963,10 @@ async function handleMessages(sock, messageBatch, sessionId = '__main__') {
         // participant is undefined), so chats appeared "stuck" as unread.
         if (finalAutoRead && !msg.key.fromMe) await sock.readMessages([msg.key]).catch(() => {});
         if (finalAutoTyping && !msg.key.fromMe) await sock.sendPresenceUpdate('composing', from).catch(() => {});
+        // Pro: Always-Recording presence per incoming message
+        if (!msg.key.fromMe && resolveProFlag('alwaysRecording', () => appState.getAlwaysRecording())) {
+            await sock.sendPresenceUpdate('recording', from).catch(() => {});
+        }
 
         const prefix = finalPrefix;
         
@@ -807,13 +1013,28 @@ async function handleMessages(sock, messageBatch, sessionId = '__main__') {
             }
         }
 
+        // Pro per-session overrides for AI + mention reply (fallback to global appState).
+        const ovMain = sessionId === '__main__' ? getMainBotSettings() : {};
+        const finalAiSystemInstruction = ovMain.aiSystemInstruction !== undefined && ovMain.aiSystemInstruction !== null
+            ? String(ovMain.aiSystemInstruction)
+            : appState.getAiSystemInstruction();
+        const finalAiMaxWords = (ovMain.aiMaxWords !== undefined && ovMain.aiMaxWords !== null)
+            ? (parseInt(ovMain.aiMaxWords) || appState.getAiMaxWords())
+            : appState.getAiMaxWords();
+        const finalMentionReply = ovMain.mentionReply !== undefined && ovMain.mentionReply !== null
+            ? String(ovMain.mentionReply)
+            : appState.getMentionReply();
+
         const isCommand = await handleCommand(sock, msg, from, text, disabledModules, { 
             workMode, owner, nsfwEnabled: finalNsfw, prefix: finalPrefix, botName: finalBotName, sessionId,
             aiAutoReply: finalAiAutoReply,
             aiAutoVoice: finalAiAutoVoice,
             aiAutoPersona: finalAiAutoPersona,
             aiAutoLang: finalAiAutoLang,
-            aiGroupMode: finalAiGroupMode
+            aiGroupMode: finalAiGroupMode,
+            aiSystemInstruction: finalAiSystemInstruction,
+            aiMaxWords: finalAiMaxWords,
+            mentionReply: finalMentionReply
         });
         if (isCommand) {
             // Increment Command Count
