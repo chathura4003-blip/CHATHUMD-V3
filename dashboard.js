@@ -1052,11 +1052,14 @@ app.post('/bot-api/broadcast', authMiddleware, async (req, res) => {
         : resolveTargets('all');
 
     const results = { sent: 0, failed: 0, total: jids.length, errors: [] };
+    // Jittered delay (1.0s..2.5s) between sends so broadcasts don't
+    // produce a perfectly regular machine-gun cadence that anti-spam
+    // systems flag immediately. Cap at 50 targets per request.
     for (const jid of jids.slice(0, 50)) {
         try {
             await session.sock.sendMessage(jid, { text: message });
             results.sent++;
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 1000 + Math.floor(Math.random() * 1500)));
         } catch (e) {
             results.failed++;
             results.errors.push({ jid, error: e.message });
