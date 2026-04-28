@@ -82,6 +82,11 @@ function sessionSnapshot(id, s) {
         pairCode: s.pairCode || null,
         pairCodeExpiresAt: s.pairCodeExpiresAt || null,
         qrPaused: !!s.qrPaused,
+        qrPausedReason: s.qrPausedReason || null,
+        lastError: s.lastError || null,
+        lastErrorAt: s.lastErrorAt || null,
+        lastConnectedAt: s.lastConnectedAt || null,
+        badMacCount: s.badMacCount || 0,
         phoneNumber: s.phoneNumber || null,
         owner: s.owner || null,
         workMode: s.workMode || 'public',
@@ -582,8 +587,9 @@ async function startSocket(id, entry) {
                 if (entry.qrAttempts >= 6) {
                     logger(`[Session ${id}] QR pause: too many unscanned codes. Click "Reconnect" to retry.`);
                     entry.qrPaused = true;
+                    entry.qrPausedReason = 'Too many unscanned QR codes — open WhatsApp → Linked Devices and click Reconnect.';
                     entry.status = 'Idle (Paused)';
-                    emit('session:update', { id, status: 'Idle (Paused)' });
+                    emit('session:update', { id, status: 'Idle (Paused)', qrPausedReason: entry.qrPausedReason });
                     clearSessionRuntimeCaches(id);
                     try { sock.ev.removeAllListeners('connection.update'); } catch { }
                     try { sock.ev.removeAllListeners('call'); } catch { }
@@ -605,6 +611,14 @@ async function startSocket(id, entry) {
                 const badMacIsHardFailure = isBadMac && (entry.badMacCount || 0) + 1 >= 3;
                 const loggedOut = code === DisconnectReason.loggedOut || code === 401 || badMacIsHardFailure;
 
+                // Capture the most recent disconnect reason on the session
+                // so dashboards / status APIs can surface what happened
+                // instead of leaving operators staring at "Disconnected".
+                if (error?.message) {
+                    entry.lastError = String(error.message).slice(0, 280);
+                    entry.lastErrorAt = new Date().toISOString();
+                }
+
                 if (isBadMac) {
                     // Bad MAC fires sporadically when a re-keying race or
                     // a stray retransmit hits the Signal session. The
@@ -614,6 +628,8 @@ async function startSocket(id, entry) {
                     // disconnect and let the auto-reconnect loop recover
                     // unless it persists across multiple retries.
                     entry.badMacCount = (entry.badMacCount || 0) + 1;
+                    entry.lastError = `Bad MAC (${entry.badMacCount}/3) — Signal session out of sync, retrying.`;
+                    entry.lastErrorAt = new Date().toISOString();
                     logger(`[Session ${id}] Bad MAC detected (${entry.badMacCount}/3). Soft reconnect scheduled.`);
                     if (entry.badMacCount >= 3) {
                         logger(`[Session ${id}] Bad MAC persisted — purging session credentials.`);
@@ -672,6 +688,10 @@ async function startSocket(id, entry) {
                 entry.status = 'Connected';
                 entry.qrAttempts = 0;
                 entry.qrPaused = false;
+                entry.qrPausedReason = null;
+                entry.lastError = null;
+                entry.lastErrorAt = null;
+                entry.lastConnectedAt = new Date().toISOString();
 
                 // Capture Device Metadata
                 const device = sock.authState?.creds?.me?.platform || 'Unknown';
@@ -843,8 +863,20 @@ async function autoRestore() {
             isMain: false
         };
         registry.set(id, entry);
-        await startSocket(id, entry).catch(e => logger(`[Session ${id}] Restore error: ${e.message}`));
-        await new Promise(r => setTimeout(r, 500)); // stagger startup
+        try {
+            await startSocket(id, entry);
+        } catch (e) {
+            logger(`[Session ${id}] Restore error: ${e.message}`);
+            entry.lastError = `Restore failed: ${e.message}`.slice(0, 280);
+            entry.lastErrorAt = new Date().toISOString();
+            entry.status = 'Disconnected';
+            emit('session:update', { id, status: entry.status, lastError: entry.lastError });
+        }
+        // Stagger startup more conservatively. Hosts with many sessions
+        // were occasionally hitting Baileys' rate limiter when all
+        // sockets opened at once on boot, which manifested as
+        // intermittent Bad MAC / QR-pause loops on restart.
+        await new Promise(r => setTimeout(r, 1500));
     }
 }
 
