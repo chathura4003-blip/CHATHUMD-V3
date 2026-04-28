@@ -144,6 +144,13 @@ module.exports = {
   BROWSER: ["Ubuntu", "Chrome", "131.0.6778.205"],
   SEARCH_CACHE_TTL: readInt(process.env.SEARCH_CACHE_TTL, 300000),
   DOWNLOAD_CACHE_TTL: readInt(process.env.DOWNLOAD_CACHE_TTL, 10 * 60 * 1000),
+  // Hard caps on concurrent downloads, finished file size, and source
+  // media duration. yt-dlp/ffmpeg are CPU & network heavy; without these
+  // limits a single user can DoS the bot or fill disk by requesting
+  // hours-long videos.
+  MAX_ACTIVE_DOWNLOADS: readInt(process.env.MAX_ACTIVE_DOWNLOADS, 2),
+  MAX_FILE_MB: readInt(process.env.MAX_FILE_MB, 200),
+  MAX_DOWNLOAD_DURATION: readInt(process.env.MAX_DOWNLOAD_DURATION, 1800),
   AUTO_READ: String(process.env.AUTO_READ || "true").toLowerCase() !== "false",
   AUTO_TYPING: String(process.env.AUTO_TYPING || "true").toLowerCase() !== "false",
   // Adult/NSFW commands are off by default. Operators must opt in by
