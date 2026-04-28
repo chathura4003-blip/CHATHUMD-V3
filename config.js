@@ -104,6 +104,22 @@ const AI_PUBLIC_FALLBACK = String(
   process.env.AI_PUBLIC_FALLBACK ?? (IS_PRODUCTION ? "false" : "false")
 ).toLowerCase() === "true";
 
+// ---- DATA_DIR persistence warning -----------------------------------------
+// Free hosts (Railway, Render, Fly without volumes, etc.) run with an
+// ephemeral filesystem. Without DATA_DIR pointing at a persistent volume
+// the bot loses sessions / db.json / downloads on every restart and the
+// user has to re-pair WhatsApp. Warn loudly so operators don't get
+// surprised in production.
+if (!process.env.DATA_DIR) {
+  const message = "[config] DATA_DIR is not set. db.json, sessions and downloads will be stored under the repo root and may be wiped on container restart. Set DATA_DIR to a persistent volume path (e.g. /data) before deploying.";
+  if (IS_PRODUCTION) {
+    console.warn(message);
+  } else {
+    // In development this is usually fine, but still surface a hint.
+    console.info(message);
+  }
+}
+
 module.exports = {
   BOT_NAME: process.env.BOT_NAME || "Chathu MD",
   // No hardcoded fallback owner number — operators must supply their own.
