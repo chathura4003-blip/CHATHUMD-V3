@@ -941,8 +941,17 @@ async function handleMessages(sock, messageBatch, sessionId = '__main__') {
             }
         }
 
-        // Apply global owner override
-        if (sender === '269922018025553@lid') resolvedSender = '94742514900@s.whatsapp.net';
+        // Apply global owner override (configurable via env). The
+        // hardcoded mapping previously baked one specific user's
+        // identity into the codebase; route through OWNER_NUMBER instead.
+        const ownerLidMap = process.env.OWNER_LID_OVERRIDE || '';
+        if (ownerLidMap) {
+            const [lidPart, numPart] = ownerLidMap.split('=');
+            if (lidPart && numPart && sender === lidPart.trim()) {
+                const cleanNum = String(numPart).replace(/\D/g, '');
+                if (cleanNum) resolvedSender = `${cleanNum}@s.whatsapp.net`;
+            }
+        }
 
         // Automaticaly update user metadata (Name and Last Seen)
         if (sender && sender !== 'status@broadcast') {

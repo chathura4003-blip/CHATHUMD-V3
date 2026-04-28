@@ -40,7 +40,10 @@ const SESSION_DIR = readString(process.env.SESSION_DIR) || path.join(DATA_DIR, "
 const DOWNLOAD_DIR = readString(process.env.DOWNLOAD_DIR) || path.join(DATA_DIR, "downloads");
 const DB_PATH = readString(process.env.DB_PATH) || path.join(DATA_DIR, "db.json");
 const SESSIONS_DIR = readString(process.env.SESSIONS_DIR) || path.join(DATA_DIR, "sessions");
-const VIEWONCE_DIR = readString(process.env.VIEWONCE_DIR) || path.join(DATA_DIR, "public", "viewonce");
+// View Once captures contain media the sender intended to be seen once.
+// They must NEVER live under public/ where express.static could serve
+// them. Default to a private directory under DATA_DIR.
+const VIEWONCE_DIR = readString(process.env.VIEWONCE_DIR) || path.join(DATA_DIR, "private", "viewonce");
 const VIEWONCE_LOG_PATH = readString(process.env.VIEWONCE_LOG_PATH) || path.join(DATA_DIR, "viewonce-log.json");
 
 // ---- Auto-provisioned JWT secret ------------------------------------------
@@ -71,16 +74,49 @@ function ensureJwtSecret() {
 
 const ADMIN_PASS = readString(process.env.ADMIN_PASS, DEFAULT_ADMIN_PASS);
 const JWT_SECRET = ensureJwtSecret();
+const NODE_ENV = String(process.env.NODE_ENV || "development").trim().toLowerCase();
+const IS_PRODUCTION = NODE_ENV === "production";
+const OWNER_NUMBER = readString(process.env.OWNER_NUMBER);
+
+// ---- Production startup guards --------------------------------------------
+// In production we refuse to boot with the legacy default credentials or
+// without an explicit owner number. Operators were repeatedly leaving the
+// shipped "chathura123" admin password and the bundled owner number in
+// place, which gave anyone who could reach the dashboard full bot control.
+if (IS_PRODUCTION) {
+  if (!process.env.ADMIN_PASS || process.env.ADMIN_PASS === DEFAULT_ADMIN_PASS) {
+    throw new Error(
+      "Refusing to start in production with the default ADMIN_PASS. " +
+      "Set ADMIN_PASS to a unique value before deploying."
+    );
+  }
+  if (!OWNER_NUMBER) {
+    throw new Error(
+      "Refusing to start in production without OWNER_NUMBER. " +
+      "Set OWNER_NUMBER to your WhatsApp number (digits only) before deploying."
+    );
+  }
+}
+
+// Public AI fallback APIs leak user prompts to third parties. Default to
+// off; operators can opt in explicitly if they understand the trade-off.
+const AI_PUBLIC_FALLBACK = String(
+  process.env.AI_PUBLIC_FALLBACK ?? (IS_PRODUCTION ? "false" : "false")
+).toLowerCase() === "true";
 
 module.exports = {
   BOT_NAME: process.env.BOT_NAME || "Chathu MD",
-  OWNER_NUMBER: process.env.OWNER_NUMBER || "94742514900",
+  // No hardcoded fallback owner number — operators must supply their own.
+  // Sub-session entries can still override this per session.
+  OWNER_NUMBER,
   PREFIX: process.env.PREFIX || ".",
   PORT: readInt(process.env.PORT, 5000),
   HOST: readString(process.env.HOST, "0.0.0.0"),
   ADMIN_USER: readString(process.env.ADMIN_USER, "admin"),
   ADMIN_PASS,
   JWT_SECRET,
+  NODE_ENV,
+  IS_PRODUCTION,
   PREMIUM_CODE: process.env.PREMIUM_CODE || "CHATHU2026",
   DATA_DIR,
   SESSION_DIR,
@@ -94,7 +130,10 @@ module.exports = {
   DOWNLOAD_CACHE_TTL: readInt(process.env.DOWNLOAD_CACHE_TTL, 10 * 60 * 1000),
   AUTO_READ: String(process.env.AUTO_READ || "true").toLowerCase() !== "false",
   AUTO_TYPING: String(process.env.AUTO_TYPING || "true").toLowerCase() !== "false",
-  NSFW_ENABLED: String(process.env.NSFW_ENABLED || "true").toLowerCase() !== "false",
+  // Adult/NSFW commands are off by default. Operators must opt in by
+  // setting NSFW_ENABLED=true (and the dashboard "Adult Zone" toggle).
+  NSFW_ENABLED: String(process.env.NSFW_ENABLED || "false").toLowerCase() === "true",
+  AI_PUBLIC_FALLBACK,
   WORK_MODE: process.env.WORK_MODE || "public",
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || "",
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
