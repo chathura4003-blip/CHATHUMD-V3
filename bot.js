@@ -455,6 +455,9 @@ async function createSocket(options = {}) {
                 if (attempts >= 6) {
                     logger('[Main Bot] QR pause: too many unscanned codes. Click "Reconnect" to retry.');
                     appState.setQrPaused(true);
+                    if (appState.setQrPausedReason) {
+                        appState.setQrPausedReason('Too many unscanned QR codes — click Reconnect to retry.');
+                    }
                     await stopBot({ status: 'Idle (Paused)' });
                 }
                 return;
@@ -467,6 +470,10 @@ async function createSocket(options = {}) {
                 appState.setStatus('Connected');
                 appState.resetQrAttempts();
                 appState.setQrPaused(false);
+                if (appState.setQrPausedReason) appState.setQrPausedReason(null);
+                if (appState.clearLastError) appState.clearLastError();
+                if (appState.resetBadMacCount) appState.resetBadMacCount();
+                if (appState.setLastConnectedAt) appState.setLastConnectedAt(new Date().toISOString());
                 appState.setConnectedAt(new Date().toISOString());
                 appState.setMainQr(null);
                 appState.setMainPairCode(null);
@@ -514,6 +521,10 @@ async function createSocket(options = {}) {
                 }
 
                 logger(`[Main Bot] Connection closed (${statusCode || 'n/a'}): ${reason}.`);
+                if (appState.setLastError) appState.setLastError(`(${statusCode || 'n/a'}) ${reason}`);
+                if (/bad\s*mac/i.test(reason || '') && appState.incBadMacCount) {
+                    appState.incBadMacCount();
+                }
                 await stopBot({ status: appState.isQrPaused() ? 'Idle (Paused)' : 'Disconnected' });
                 if (dashboardIO) {
                     dashboardIO.emit('update', { status: 'Reconnecting...' });

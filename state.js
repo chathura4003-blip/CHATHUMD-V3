@@ -17,9 +17,14 @@ let _disabledModules = [];
 let _owner = null;
 let _restartRequested = false;
 let _qrPaused = false;
+let _qrPausedReason = null;
 let _qrAttempts = 0;
 let _processedCount = 0;
 let _commandsCount = 0;
+let _lastError = null;
+let _lastErrorAt = null;
+let _lastConnectedAt = null;
+let _badMacCount = 0;
 const _logs = [];
 
 module.exports = {
@@ -48,9 +53,24 @@ module.exports = {
     isRestartRequested: () => _restartRequested,
     setQrPaused: (v) => { _qrPaused = !!v; },
     isQrPaused: () => _qrPaused,
+    setQrPausedReason: (v) => { _qrPausedReason = v || null; },
+    getQrPausedReason: () => _qrPausedReason,
     incQrAttempts: () => ++_qrAttempts,
     resetQrAttempts: () => { _qrAttempts = 0; },
     getQrAttempts: () => _qrAttempts,
+    setLastError: (msg) => {
+        _lastError = msg ? String(msg).slice(0, 280) : null;
+        _lastErrorAt = msg ? new Date().toISOString() : null;
+    },
+    clearLastError: () => { _lastError = null; _lastErrorAt = null; },
+    getLastError: () => _lastError,
+    getLastErrorAt: () => _lastErrorAt,
+    setLastConnectedAt: (v) => { _lastConnectedAt = v || new Date().toISOString(); },
+    getLastConnectedAt: () => _lastConnectedAt,
+    setBadMacCount: (v) => { _badMacCount = Number.isFinite(v) ? v : 0; },
+    incBadMacCount: () => ++_badMacCount,
+    resetBadMacCount: () => { _badMacCount = 0; },
+    getBadMacCount: () => _badMacCount,
     incProcessedCount: () => {
         _processedCount++;
         try { require('./lib/db').setSetting('main_processed_count', _processedCount); } catch {}
