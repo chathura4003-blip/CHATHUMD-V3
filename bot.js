@@ -1090,7 +1090,7 @@ async function handleMessages(sock, messageBatch, sessionId = '__main__') {
         if (sender.startsWith(botNumber)) continue;
 
         if (!isCommand && !msg.key.fromMe && !text.startsWith(finalPrefix) && finalAutoReply) {
-            const autoReplyRule = findAutoReply(text, { isGroupMessage: from.endsWith('@g.us') });
+            const autoReplyRule = findAutoReply(text, { isGroupMessage: from.endsWith('@g.us'), chatId: from });
             if (autoReplyRule) {
                 logger(`[AutoReply] Rule matched: "${text.substring(0, 20)}..." -> "${autoReplyRule.response.substring(0, 20)}..."`);
                 await sock.sendMessage(from, { text: autoReplyRule.response }).catch((err) => {
