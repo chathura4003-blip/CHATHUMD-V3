@@ -681,6 +681,10 @@
         </div>
         ${s.id !== '__main__' ? `<div class="text-xs dim mb-1">ID: <code>${escapeHtml(s.id)}</code></div>` : ''}
         ${s.platform ? `<div class="dim text-xs">Platform: ${escapeHtml(s.platform)}</div>` : ''}
+        ${s.lastConnectedAt ? `<div class="dim text-xs">Last connected: ${escapeHtml(fmtTime(s.lastConnectedAt))}</div>` : ''}
+        ${s.qrPausedReason ? `<div class="text-xs" style="color:#fbbf24">⏸ ${escapeHtml(s.qrPausedReason)}</div>` : ''}
+        ${s.lastError ? `<div class="text-xs" style="color:#f87171" title="${escapeHtml(s.lastErrorAt || '')}">⚠ ${escapeHtml(s.lastError)}</div>` : ''}
+        ${s.badMacCount > 0 ? `<div class="text-xs" style="color:#fbbf24">Bad MAC count: ${s.badMacCount}/3</div>` : ''}
       </div>
       <div class="actions">
         ${!connected ? `

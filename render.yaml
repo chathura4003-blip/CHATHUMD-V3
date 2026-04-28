@@ -1,4 +1,9 @@
 # Render.com blueprint
+#
+# Note: this blueprint targets the Node-only build path. For full media
+# command support (yt-dlp, audio extraction) deploy with the included
+# Dockerfile instead — Render's Node runtime does not ship ffmpeg /
+# python3 / yt-dlp out of the box.
 services:
   - type: web
     name: chathu-md-bot
@@ -16,7 +21,11 @@ services:
         value: /opt/render/project/src/data
       - key: ADMIN_USER
         value: admin
+      # Required: production refuses to boot without a non-default ADMIN_PASS.
       - key: ADMIN_PASS
+        sync: false
+      # Required: production refuses to boot without OWNER_NUMBER.
+      - key: OWNER_NUMBER
         sync: false
       - key: JWT_SECRET
         generateValue: true
@@ -26,6 +35,29 @@ services:
         value: "."
       - key: WORK_MODE
         value: public
+      - key: NODE_ENV
+        value: production
+      # Privacy / safety defaults — keep off in production.
+      - key: NSFW_ENABLED
+        value: "false"
+      - key: AI_PUBLIC_FALLBACK
+        value: "false"
+      # Download safety caps (override per-deploy as needed).
+      - key: MAX_ACTIVE_DOWNLOADS
+        value: "2"
+      - key: MAX_FILE_MB
+        value: "200"
+      - key: MAX_DOWNLOAD_DURATION
+        value: "1800"
+      # AI keys — set in dashboard; leaving sync:false hides values from logs.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
     disk:
       name: chathu-data
       mountPath: /opt/render/project/src/data

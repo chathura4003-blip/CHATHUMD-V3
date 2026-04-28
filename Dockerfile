@@ -22,7 +22,12 @@ RUN python3 -m pip install --break-system-packages -U "yt-dlp[default]"
 
 ENV NODE_ENV=production \
     DATA_DIR=/data \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    MAX_ACTIVE_DOWNLOADS=2 \
+    MAX_FILE_MB=200 \
+    MAX_DOWNLOAD_DURATION=1800 \
+    NSFW_ENABLED=false \
+    AI_PUBLIC_FALLBACK=false
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
