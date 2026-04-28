@@ -390,7 +390,10 @@ async function requestPairCodeInternal(id, cleaned, options = {}) {
             entry.status = 'Awaiting Pair Code';
             emit('session:paircode', { id, code, expiresAt: entry.pairCodeExpiresAt });
             emit('session:update', { id, pairCode: code, pairCodeExpiresAt: entry.pairCodeExpiresAt, status: entry.status });
-            logger(`[Session ${id}] Pair code requested for ${formattedPhone}: ${code}`);
+            // Don't log the actual pair code — it grants device-link
+            // access for ~60s. The dashboard surfaces the code over an
+            // authenticated socket already.
+            logger(`[Session ${id}] Pair code requested for ${formattedPhone}.`);
             return { ok: true, code, expiresAt: entry.pairCodeExpiresAt };
         } catch (error) {
             lastError = error;
@@ -437,9 +440,23 @@ async function createSession(id, opts = {}) {
 
     const dir = sessionDir(id);
 
-    // For pair mode: always start fresh — stale creds cause "Couldn't link device"
+    // For pair mode: only wipe stale creds when the existing directory
+    // does not yet have a registered device. Repeated pair-code clicks
+    // on a session that was already partially registered used to clear
+    // credentials too aggressively, forcing the user back to square one
+    // every time they hit the button.
     if (opts.pairMode && fs.existsSync(dir)) {
-        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { }
+        let registered = false;
+        try {
+            const credsPath = path.join(dir, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+                const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                registered = !!creds?.registered;
+            }
+        } catch {}
+        if (!registered) {
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch { }
+        }
     }
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -557,10 +574,12 @@ async function startSocket(id, entry) {
                     entry.status = 'Awaiting QR Scan';
                     emit('session:qr', { id, qr: dataUrl });
                     emit('session:update', { id, status: 'Awaiting QR Scan', qr: dataUrl });
-                    logger(`[Session ${id}] QR generated (${entry.qrAttempts}/5)`);
+                    logger(`[Session ${id}] QR generated (${entry.qrAttempts}/6)`);
                 } catch (e) { logger(`[Session ${id}] QR error: ${e.message}`); }
-                // Throttle: stop generating after 5 unscanned QRs
-                if (entry.qrAttempts >= 2) {
+                // Throttle: pause after 6 unscanned QRs (matches main bot).
+                // The previous threshold of 2 paused legitimate slow scanners
+                // before they could even open WhatsApp → Linked Devices.
+                if (entry.qrAttempts >= 6) {
                     logger(`[Session ${id}] QR pause: too many unscanned codes. Click "Reconnect" to retry.`);
                     entry.qrPaused = true;
                     entry.status = 'Idle (Paused)';
@@ -580,16 +599,32 @@ async function startSocket(id, entry) {
                 const error = lastDisconnect?.error;
                 const code = error?.output?.statusCode;
                 const isBadMac = error?.message?.includes('Bad MAC') || error?.stack?.includes('verifyMAC');
-                const loggedOut = code === DisconnectReason.loggedOut || code === 401 || isBadMac;
+                // Only treat Bad MAC as a hard logout once it has tripped
+                // the 3-strike limit below; otherwise we allow the
+                // auto-reconnect loop to recover transient signal drift.
+                const badMacIsHardFailure = isBadMac && (entry.badMacCount || 0) + 1 >= 3;
+                const loggedOut = code === DisconnectReason.loggedOut || code === 401 || badMacIsHardFailure;
 
                 if (isBadMac) {
-                    logger(`[Session ${id}] ⚠️ Critical Session Corruption (Bad MAC) detected. Purging session for security.`);
-                    clearSessionRuntimeCaches(id);
-                    entry.sock = null;
-                    try { fs.rmSync(sessionDir(id), { recursive: true, force: true }); } catch { }
-                    registry.delete(id);
-                    emit('session:removed', { id });
-                    return;
+                    // Bad MAC fires sporadically when a re-keying race or
+                    // a stray retransmit hits the Signal session. The
+                    // previous handler purged credentials on the first
+                    // occurrence, which forced users to re-pair after
+                    // every transient blip. Treat it as a soft
+                    // disconnect and let the auto-reconnect loop recover
+                    // unless it persists across multiple retries.
+                    entry.badMacCount = (entry.badMacCount || 0) + 1;
+                    logger(`[Session ${id}] Bad MAC detected (${entry.badMacCount}/3). Soft reconnect scheduled.`);
+                    if (entry.badMacCount >= 3) {
+                        logger(`[Session ${id}] Bad MAC persisted — purging session credentials.`);
+                        clearSessionRuntimeCaches(id);
+                        entry.sock = null;
+                        entry.badMacCount = 0;
+                        try { fs.rmSync(sessionDir(id), { recursive: true, force: true }); } catch { }
+                        registry.delete(id);
+                        emit('session:removed', { id });
+                        return;
+                    }
                 }
 
                 entry.sock = null;
@@ -650,14 +685,25 @@ async function startSocket(id, entry) {
                 entry.pairCode = null;
                 emit('session:update', { id, status: 'Connected', number: num, platform: entry.platform });
                 logger(`[Session ${id}] Connected as ${num} on ${entry.platform}`);
+                entry.badMacCount = 0;
 
-                // Sync groups for sub-session
-                try {
-                    const { syncGroups } = require('./bot');
-                    if (syncGroups) await syncGroups(sock, id);
-                } catch (e) {
-                    logger(`[Session ${id}] Group sync failed: ${e.message}`);
-                }
+                // Group sync can take several seconds when a session
+                // owns hundreds of groups. Run it lazily so the connect
+                // handler returns immediately and the dashboard doesn't
+                // appear to freeze right after pairing.
+                setTimeout(() => {
+                    if (registry.get(id) !== entry) return;
+                    try {
+                        const { syncGroups } = require('./bot');
+                        if (syncGroups) {
+                            syncGroups(sock, id).catch((error) => {
+                                logger(`[Session ${id}] Lazy group sync failed: ${error.message}`);
+                            });
+                        }
+                    } catch (e) {
+                        logger(`[Session ${id}] Lazy group sync schedule failed: ${e.message}`);
+                    }
+                }, 3000);
                 applyProFeatureLoops(id, entry);
             }
         });

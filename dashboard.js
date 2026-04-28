@@ -718,7 +718,18 @@ app.post('/bot-api/sessions/__main__/paircode', authMiddleware, async (req, res)
         appState.resetQrAttempts();
         appState.setQrPaused(false);
         await stopBot({ status: 'Disconnected' });
-        await startBot({ forceRestart: true, clearCredentials: true, pairMode: true, phoneNumber: normalized.phone });
+        // Only wipe credentials if no registered device exists yet.
+        // Repeated pair-code clicks on a partially registered session
+        // used to nuke creds every time, forcing the user to start over.
+        const credsPath = path.join(config.SESSION_DIR, 'creds.json');
+        let alreadyRegistered = false;
+        try {
+            if (fs.existsSync(credsPath)) {
+                const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                alreadyRegistered = !!creds?.registered;
+            }
+        } catch {}
+        await startBot({ forceRestart: true, clearCredentials: !alreadyRegistered, pairMode: true, phoneNumber: normalized.phone });
 
         let code = null;
         const timeoutAt = Date.now() + 12000;

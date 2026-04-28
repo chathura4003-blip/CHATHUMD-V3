@@ -291,7 +291,11 @@ async function requestMainPairCode(sock) {
                 io.emit('session:paircode', { id: '__main__', code, expiresAt });
                 io.emit('update', { status: 'Awaiting Pair Code', pairCode: code, pairCodeExpiresAt: expiresAt });
             }
-            logger(`[Main Bot] Pair code generated for ${formattedPhone}: ${code}`);
+            // Avoid logging the actual pair code — codes grant device-link
+            // access. The dashboard surfaces the code over an authenticated
+            // socket; logs are persisted/forwarded so they should not
+            // contain the secret.
+            logger(`[Main Bot] Pair code generated for ${formattedPhone}.`);
             return code;
         } catch (error) {
             lastError = error;
@@ -478,7 +482,16 @@ async function createSocket(options = {}) {
                     dashboardIO.emit('update', { status: 'Connected', number });
                 }
 
-                await syncGroups(sock, '__main__');
+                // Group sync can take several seconds for accounts with many
+                // groups. Run it lazily so the connection.update handler
+                // returns immediately and the dashboard doesn't appear
+                // "frozen" right after pairing.
+                setTimeout(() => {
+                    if (sock !== activeSocket) return;
+                    syncGroups(sock, '__main__').catch((error) => {
+                        logger(`[Main Bot] Lazy group sync failed: ${error.message}`);
+                    });
+                }, 3000);
                 applyProFeatureLoops(sock, '__main__');
                 return;
             }
