@@ -5,7 +5,8 @@
  * Static checks for the admin dashboard UI.
  *
  *  - All `onclick="fn(..."` handlers referenced in the page templates must be
- *    exposed by `public/js/app.js` (or the SPA shell `core.js`).
+ *    exposed by `public/js/app.js`. (The legacy `core.js` SPA shell was
+ *    removed in the production-stability cleanup.)
  *  - Every CSS class used in `public/pages/*.html` must either be defined in
  *    `public/css/app.css` or be a known utility/state class. This guards
  *    against the "missing CSS" regressions that previously left modal headers,
@@ -22,7 +23,6 @@ const ROOT = path.resolve(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 const PAGES_DIR = path.join(PUBLIC, 'pages');
 const APP_JS = path.join(PUBLIC, 'js', 'app.js');
-const CORE_JS = path.join(PUBLIC, 'js', 'core.js');
 const APP_CSS = path.join(PUBLIC, 'css', 'app.css');
 
 function readFile(p) {
@@ -98,13 +98,11 @@ function main() {
     }
 
     const appJs = readFile(APP_JS);
-    const coreJs = readFile(CORE_JS);
     const appCss = readFile(APP_CSS);
-    const adminHtml = readFile(path.join(PUBLIC, 'admin.html'));
     // Page-level templates often define their own classes via inline <style>
     // blocks. Treat those blocks as additional CSS sources.
     const inlineCss = pages.map(readFile).join('\n');
-    const allCss = [appCss, inlineCss, adminHtml].join('\n');
+    const allCss = [appCss, inlineCss].join('\n');
 
     const errors = [];
     const handlerCache = new Map();
@@ -117,10 +115,10 @@ function main() {
 
         for (const fn of handlers) {
             if (!handlerCache.has(fn)) {
-                handlerCache.set(fn, functionDefinedIn(fn, appJs) || functionDefinedIn(fn, coreJs));
+                handlerCache.set(fn, functionDefinedIn(fn, appJs));
             }
             if (!handlerCache.get(fn)) {
-                errors.push(`${rel}: onclick handler "${fn}" is not defined in app.js or core.js`);
+                errors.push(`${rel}: onclick handler "${fn}" is not defined in app.js`);
             }
         }
 
