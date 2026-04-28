@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Static Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Syntax check changed JS files
+        run: |
+          set -e
+          for file in $(git ls-files '*.js' | grep -v node_modules); do
+            node --check "$file"
+          done
+
+      - name: Verify admin dashboard UI
+        run: npm run check:admin-ui
