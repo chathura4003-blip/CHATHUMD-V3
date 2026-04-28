@@ -289,7 +289,12 @@
     function logout() {
         State.token = null; State.user = null;
         localStorage.removeItem('chmd_token'); localStorage.removeItem('chmd_user');
-        if (State.socket) { try { State.socket.disconnect(); } catch { } State.socket = null; }
+        if (State.socket) {
+          try { State.socket.removeAllListeners(); } catch { }
+          try { State.socket.disconnect(); } catch { }
+          State.socket = null;
+          State._socketListenersAttached = false;
+        }
         location.href = '/login';
       }
 
@@ -327,6 +332,8 @@
         setupSocket();
         loadStats();
         setInterval(loadStats, 7000);
+        loadHealthWarnings();
+        setInterval(loadHealthWarnings, 60000);
         const loaders = {
           dashboard: typeof loadLogs === 'function' ? loadLogs : null,
           sessions: typeof loadSessions === 'function' ? loadSessions : null,
@@ -358,12 +365,19 @@
     }
 
     // ====== SOCKET ======
+    // Idempotency guard — even if setupSocket() is called more than once
+    // (e.g. after a navigation re-init), only attach listeners on the
+    // first invocation. socket.io transparently re-uses the same socket
+    // for its internal reconnect loop, so there is no need to re-bind.
     function setupSocket() {
-      if (State.socket) return;
-      State.socket = io({
-        transports: ['websocket', 'polling'],
-        auth: { token: State.token ? `Bearer ${State.token}` : '' }
-      });
+      if (State.socket && State._socketListenersAttached) return;
+      if (!State.socket) {
+        State.socket = io({
+          transports: ['websocket', 'polling'],
+          auth: { token: State.token ? `Bearer ${State.token}` : '' }
+        });
+      }
+      State._socketListenersAttached = true;
       State.socket.on('connect_error', (error) => {
         const message = String(error?.message || 'Socket connection failed');
         if (/token|auth/i.test(message)) {
@@ -557,6 +571,52 @@
         setText('navSessions', s.sessionCount ?? 0);
         updateMainStatus(s.status, s.number);
       } catch (e) { /* silent */ }
+    }
+
+    // ====== HEALTH WARNINGS BANNER ======
+    function ensureHealthBanner() {
+      let banner = document.getElementById('healthWarnings');
+      if (banner) return banner;
+      const content = document.querySelector('main.content');
+      if (!content) return null;
+      banner = document.createElement('div');
+      banner.id = 'healthWarnings';
+      banner.className = 'health-warnings';
+      banner.style.display = 'none';
+      content.insertBefore(banner, content.firstChild);
+      return banner;
+    }
+
+    async function loadHealthWarnings() {
+      const banner = ensureHealthBanner();
+      if (!banner) return;
+      try {
+        const data = await api('/bot-api/health/warnings');
+        const warnings = Array.isArray(data?.warnings) ? data.warnings : [];
+        // Rebuild via createElement / textContent so untrusted server
+        // messages cannot inject markup into the dashboard.
+        while (banner.firstChild) banner.removeChild(banner.firstChild);
+        if (!warnings.length) {
+          banner.style.display = 'none';
+          return;
+        }
+        banner.style.display = 'flex';
+        for (const w of warnings) {
+          const item = document.createElement('div');
+          item.className = 'health-warning health-warning--' + (w.level || 'info');
+          const code = document.createElement('span');
+          code.className = 'health-warning-code';
+          code.textContent = w.code || w.level || 'info';
+          const msg = document.createElement('span');
+          msg.className = 'health-warning-msg';
+          msg.textContent = w.message || '';
+          item.appendChild(code);
+          item.appendChild(msg);
+          banner.appendChild(item);
+        }
+      } catch (e) {
+        banner.style.display = 'none';
+      }
     }
 
     // ====== SESSIONS ======

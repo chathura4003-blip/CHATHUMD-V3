@@ -3883,3 +3883,50 @@
       color: #f87171;
       border: 1px solid rgba(239, 68, 68, 0.25);
     }
+
+/* ----- Health warnings banner ----- */
+.health-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 14px 0;
+}
+.health-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+}
+.health-warning--warn {
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fbbf24;
+}
+.health-warning--error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.30);
+  color: #f87171;
+}
+.health-warning--info {
+  background: rgba(59, 130, 246, 0.10);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+.health-warning-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+.health-warning-msg {
+  flex: 1;
+  word-break: break-word;
+}

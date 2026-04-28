@@ -921,6 +921,120 @@ app.get('/bot-api/bot/check-ai-keys', authMiddleware, async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Aggregate operator-facing warnings — surfaced as a banner on the
+// dashboard so problems (missing tools, dangerous toggles left on) are
+// visible without having to dig through individual settings pages.
+app.get('/bot-api/health/warnings', authMiddleware, (req, res) => {
+    const warnings = [];
+    try {
+        const cfg = require('./config');
+        const sessionMgr = require('./session-manager');
+        const ytdlpMgr = require('./lib/ytdlp-manager');
+        const dl = require('./lib/download-manager');
+
+        // AI keys
+        const aiKeys = ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY'];
+        const haveAi = aiKeys.some((k) => (process.env[k] || cfg[k] || '').trim());
+        if (!haveAi) {
+            warnings.push({
+                level: 'warn',
+                code: 'ai-keys-missing',
+                message: 'No AI provider key configured (GEMINI/OPENAI/GROQ/OPENROUTER). AI commands will fail.',
+            });
+        }
+
+        // ffmpeg
+        if (!ytdlpMgr.FFMPEG_PATH) {
+            warnings.push({
+                level: 'warn',
+                code: 'ffmpeg-missing',
+                message: 'ffmpeg not detected. Audio extraction and video re-encoding will be unavailable.',
+            });
+        }
+
+        // yt-dlp binary
+        try {
+            const fsLocal = require('fs');
+            const binPath = ytdlpMgr.getBinPath ? ytdlpMgr.getBinPath() : null;
+            if (!binPath || !fsLocal.existsSync(binPath)) {
+                warnings.push({
+                    level: 'warn',
+                    code: 'yt-dlp-missing',
+                    message: 'yt-dlp binary not found. .play / .download commands will fail until installed.',
+                });
+            }
+        } catch {}
+
+        // Public fallback ON
+        if (cfg.AI_PUBLIC_FALLBACK) {
+            warnings.push({
+                level: 'warn',
+                code: 'ai-public-fallback-on',
+                message: 'AI_PUBLIC_FALLBACK is ON — user prompts may be sent to third-party public AI APIs.',
+            });
+        }
+
+        // NSFW ON
+        if (cfg.NSFW_ENABLED) {
+            warnings.push({
+                level: 'info',
+                code: 'nsfw-on',
+                message: 'NSFW commands are enabled (NSFW_ENABLED=true). Adult Zone is visible in .menu.',
+            });
+        }
+
+        // Privacy-sensitive features active on any session
+        try {
+            const list = (sessionMgr.getAll && sessionMgr.getAll()) || [];
+            const flagged = [];
+            for (const s of list) {
+                if (s.antiDelete) flagged.push(`${s.id || s.label}: anti-delete`);
+                if (s.antiViewOnce) flagged.push(`${s.id || s.label}: anti-view-once`);
+                if (s.alwaysOnline) flagged.push(`${s.id || s.label}: always-online`);
+                if (s.autoBio) flagged.push(`${s.id || s.label}: auto-bio`);
+            }
+            if (flagged.length) {
+                warnings.push({
+                    level: 'info',
+                    code: 'privacy-features-on',
+                    message: `Privacy-sensitive features enabled (${flagged.length}): ${flagged.slice(0, 6).join(', ')}${flagged.length > 6 ? '…' : ''}.`,
+                });
+            }
+        } catch {}
+
+        // Default credentials still in use (development only — production
+        // refuses to boot, see config.js)
+        if (!cfg.IS_PRODUCTION && process.env.ADMIN_PASS === undefined) {
+            warnings.push({
+                level: 'info',
+                code: 'dev-default-creds',
+                message: 'Running with the development default ADMIN_PASS. Set ADMIN_PASS before deploying to production.',
+            });
+        }
+
+        // DATA_DIR not set
+        if (!process.env.DATA_DIR) {
+            warnings.push({
+                level: 'info',
+                code: 'data-dir-unset',
+                message: 'DATA_DIR is not set. WhatsApp sessions and db.json may be lost on container restart.',
+            });
+        }
+
+        // Download stats (informational)
+        try {
+            const stats = dl.getDownloadStats ? dl.getDownloadStats() : null;
+            if (stats) {
+                res.set('X-Download-Active', String(stats.active));
+                res.set('X-Download-Queue', String(stats.queued));
+            }
+        } catch {}
+    } catch (e) {
+        warnings.push({ level: 'error', code: 'warnings-error', message: `Warning collection failed: ${e.message}` });
+    }
+    res.json({ warnings });
+});
+
 app.post('/bot-api/sessions', authMiddleware, async (req, res) => {
     const { id, pairMode, phone } = req.body || {};
     let normalizedPhone = null;
